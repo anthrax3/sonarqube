@@ -38,6 +38,7 @@ import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang.StringUtils;
 import org.sonar.api.ExtensionPoint;
 import org.sonar.api.ce.ComputeEngineSide;
+import org.sonar.api.rule.RuleKey;
 import org.sonar.api.rule.RuleStatus;
 import org.sonar.api.rule.Severity;
 import org.sonar.api.rules.RuleType;
@@ -693,6 +694,7 @@ public interface RulesDefinition {
     private final Map<String, NewParam> paramsByKey = new HashMap<>();
     private final DebtRemediationFunctions functions;
     private boolean activatedByDefault;
+    private final Set<RuleKey> deprecatedRuleKeys = new TreeSet<>();
 
     private NewRule(@Nullable String pluginKey, String repoKey, String key) {
       this.pluginKey = pluginKey;
@@ -925,6 +927,22 @@ public interface RulesDefinition {
       }
     }
 
+    /**
+     * If you want to rename the key of a rule or change its repository or both, register the rule previous repository
+     * and key with this method in order to avoid having issues created with the rule's previous rule key to be closed
+     * and reopened at next analysis.
+     * <p>
+     * Ordering of deprecated rule keys is the same as the calls to this method but is not meaningful to the rule
+     * renaming feature in SonarQube.
+     *
+     * @since 7.1
+     * @throws IllegalArgumentException if {@code repository} or {@code key} is {@code null} or empty.
+     */
+    public NewRule addDeprecatedRuleKey(String repository, String key) {
+      deprecatedRuleKeys.add(RuleKey.of(repository, key));
+      return this;
+    }
+
     @Override
     public String toString() {
       return format("[repository=%s, key=%s]", repoKey, key);
@@ -950,6 +968,7 @@ public interface RulesDefinition {
     private final Map<String, Param> params;
     private final RuleStatus status;
     private final boolean activatedByDefault;
+    private final Set<RuleKey> deprecatedRuleKeys;
 
     private Rule(Repository repository, NewRule newRule) {
       this.pluginKey = newRule.pluginKey;
@@ -973,6 +992,7 @@ public interface RulesDefinition {
       }
       this.params = Collections.unmodifiableMap(paramsBuilder);
       this.activatedByDefault = newRule.activatedByDefault;
+      this.deprecatedRuleKeys = ImmutableSortedSet.copyOf(newRule.deprecatedRuleKeys);
     }
 
     public Repository repository() {
@@ -1075,6 +1095,17 @@ public interface RulesDefinition {
 
     public Set<String> tags() {
       return tags;
+    }
+
+    /**
+     * Deprecated rules keys for this rule.
+     * <p>
+     * Used by SonarQube to provide support for rule key renaming and/or change of repository.
+     *
+     * @since 7.1
+     */
+    public Set<RuleKey> deprecatedRuleKeys() {
+      return deprecatedRuleKeys;
     }
 
     /**
