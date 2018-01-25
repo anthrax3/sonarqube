@@ -19,11 +19,13 @@
  */
 package org.sonar.server.rule;
 
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Maps;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -98,11 +100,15 @@ public class RegisterRules implements Startable {
     Profiler profiler = Profiler.create(LOG).startInfo("Register rules");
     try (DbSession dbSession = dbClient.openSession(false)) {
       Map<RuleKey, RuleDefinitionDto> allRules = loadRules(dbSession);
-      List<RuleKey> keysToIndex = new ArrayList<>();
 
       RulesDefinition.Context context = defLoader.load();
       boolean orgsEnabled = organizationFlags.isEnabled(dbSession);
-      for (RulesDefinition.ExtendedRepository repoDef : getRepositories(context)) {
+      List<RulesDefinition.ExtendedRepository> repositories = getRepositories(context);
+
+      Map<RuleKey, RuleKey> renamedRules = detectRenamedKeys(allRules, repositories);
+
+      List<RuleKey> keysToIndex = new ArrayList<>();
+      for (RulesDefinition.ExtendedRepository repoDef : repositories) {
         if (languages.get(repoDef.language()) != null) {
           for (RulesDefinition.Rule ruleDef : repoDef.rules()) {
             RuleKey ruleKey = RuleKey.of(ruleDef.repository().key(), ruleDef.key());
@@ -116,8 +122,8 @@ public class RegisterRules implements Startable {
               }
               continue;
             }
-            boolean relevantForIndex = registerRule(ruleDef, allRules, dbSession);
-            if (relevantForIndex) {
+            EnumSet<RegistrationStatus> relevantForIndex = registerRule(ruleDef, allRules, renamedRules, dbSession);
+            if (!relevantForIndex.isEmpty()) {
               keysToIndex.add(ruleKey);
             }
           }
@@ -138,6 +144,39 @@ public class RegisterRules implements Startable {
     }
   }
 
+  /**
+   * @return ruleKey in db mapped by their new RuleKey
+   */
+  private static Map<RuleKey, RuleKey> detectRenamedKeys(Map<RuleKey, RuleDefinitionDto> allRules, List<RulesDefinition.ExtendedRepository> repositories) {
+    Map<RuleKey, RuleKey> ruleKeysByDeprecatedOnes = loadDeprecatedRuleKeys(repositories);
+    ImmutableMap.Builder<RuleKey, RuleKey> renamedRuleKeys = ImmutableMap.builder();
+    allRules.keySet()
+      .forEach(dbRuleKey -> {
+        RuleKey renamedTo = ruleKeysByDeprecatedOnes.get(dbRuleKey);
+        if (renamedTo != null) {
+          renamedRuleKeys.put(renamedTo, dbRuleKey);
+        }
+      });
+
+    return renamedRuleKeys.build();
+  }
+
+  /**
+   * @return ruleKeys mapped by the deprecated rule keys they declare.
+   */
+  private static Map<RuleKey, RuleKey> loadDeprecatedRuleKeys(List<RulesDefinition.ExtendedRepository> repositories) {
+    ImmutableMap.Builder<RuleKey, RuleKey> builder = ImmutableMap.builder();
+    repositories
+      .forEach(repo -> repo.rules()
+        .stream()
+        .filter(rule -> !rule.deprecatedRuleKeys().isEmpty())
+        .forEach(rule -> {
+          RuleKey ruleKey = RuleKey.of(repo.key(), rule.key());
+          rule.deprecatedRuleKeys().forEach(deprecatedRuleKey -> builder.put(deprecatedRuleKey, ruleKey));
+        }));
+    return builder.build();
+  }
+
   private void persistRepositories(DbSession dbSession, List<RulesDefinition.Repository> repositories) {
     dbClient.ruleRepositoryDao().truncate(dbSession);
     List<RuleRepositoryDto> dtos = repositories
@@ -153,8 +192,13 @@ public class RegisterRules implements Startable {
     // nothing
   }
 
-  private boolean registerRule(RulesDefinition.Rule ruleDef, Map<RuleKey, RuleDefinitionDto> allRules, DbSession session) {
+  private enum RegistrationStatus {
+    CREATED, RENAMED, UPDATED
+  }
+
+  private EnumSet<RegistrationStatus> registerRule(RulesDefinition.Rule ruleDef, Map<RuleKey, RuleDefinitionDto> allRules, Map<RuleKey, RuleKey> renamedRules, DbSession session) {
     RuleKey ruleKey = RuleKey.of(ruleDef.repository().key(), ruleDef.key());
+    RuleKey renamedFrom = renamedRules.get(ruleKey);
 
     RuleDefinitionDto existingRule = allRules.remove(ruleKey);
     boolean newRule;
@@ -180,12 +224,21 @@ public class RegisterRules implements Startable {
       executeUpdate = true;
     }
 
-    if (executeUpdate) {
+    if (executeUpdate || renamedFrom != null) {
       update(session, rule);
     }
 
     mergeParams(ruleDef, rule, session);
-    return newRule || executeUpdate;
+    EnumSet<RegistrationStatus> res = EnumSet.noneOf(RegistrationStatus.class);
+    if (newRule) {
+      res.add(RegistrationStatus.CREATED);
+    } else if (executeUpdate) {
+      res.add(RegistrationStatus.UPDATED);
+    }
+    if (renamedFrom != null) {
+      res.add(RegistrationStatus.RENAMED);
+    }
+    return res;
   }
 
   private Map<RuleKey, RuleDefinitionDto> loadRules(DbSession session) {
