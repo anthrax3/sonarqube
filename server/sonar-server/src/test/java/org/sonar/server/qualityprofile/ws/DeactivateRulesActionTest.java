@@ -35,7 +35,7 @@ import org.sonar.server.exceptions.BadRequestException;
 import org.sonar.server.exceptions.ForbiddenException;
 import org.sonar.server.exceptions.UnauthorizedException;
 import org.sonar.server.organization.TestDefaultOrganizationProvider;
-import org.sonar.server.qualityprofile.RuleActivator;
+import org.sonar.server.qualityprofile.QProfileRules;
 import org.sonar.server.rule.index.RuleQuery;
 import org.sonar.server.rule.ws.RuleQueryFactory;
 import org.sonar.server.tester.UserSessionRule;
@@ -63,10 +63,10 @@ public class DeactivateRulesActionTest {
   public ExpectedException thrown = ExpectedException.none();
 
   private DbClient dbClient = db.getDbClient();
-  private RuleActivator ruleActivator = mock(RuleActivator.class, RETURNS_DEEP_STUBS);
+  private QProfileRules qProfileRules = mock(QProfileRules.class, RETURNS_DEEP_STUBS);
   private QProfileWsSupport wsSupport = new QProfileWsSupport(dbClient, userSession, TestDefaultOrganizationProvider.from(db));
   private RuleQueryFactory ruleQueryFactory = mock(RuleQueryFactory.class);
-  private DeactivateRulesAction underTest = new DeactivateRulesAction(ruleQueryFactory, userSession, ruleActivator, wsSupport, dbClient);
+  private DeactivateRulesAction underTest = new DeactivateRulesAction(ruleQueryFactory, userSession, qProfileRules, wsSupport, dbClient);
   private WsActionTester ws = new WsActionTester(underTest);
   private OrganizationDto defaultOrganization;
   private OrganizationDto organization;
@@ -119,7 +119,7 @@ public class DeactivateRulesActionTest {
       .setParam(PARAM_TARGET_KEY, qualityProfile.getKee())
       .execute();
 
-    verify(ruleActivator).bulkDeactivateAndCommit(any(DbSession.class), any(RuleQuery.class), any(QProfileDto.class));
+    verify(qProfileRules).bulkDeactivateAndCommit(any(DbSession.class), any(QProfileDto.class), any(RuleQuery.class));
   }
 
   @Test
@@ -137,7 +137,7 @@ public class DeactivateRulesActionTest {
       .setParam(PARAM_TARGET_KEY, qualityProfile.getKee())
       .execute();
 
-    verify(ruleActivator).bulkDeactivateAndCommit(any(DbSession.class), any(RuleQuery.class), any(QProfileDto.class));
+    verify(qProfileRules).bulkDeactivateAndCommit(any(DbSession.class), any(QProfileDto.class), any(RuleQuery.class));
   }
 
   @Test
